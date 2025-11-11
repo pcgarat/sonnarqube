@@ -1,0 +1,43 @@
+# ============================================
+# Configuración de Proyectos para SonarQube
+# ============================================
+# Copia este archivo a projects.conf y configura tus proyectos
+# cp projects.conf.example projects.conf
+#
+# Formato: Sección INI con configuración por proyecto
+# Cada proyecto debe tener:
+#   - project_key: Clave única en SonarQube (obligatorio)
+#   - project_name: Nombre descriptivo (obligatorio)
+#   - project_path: Ruta absoluta al directorio del proyecto (obligatorio)
+#   - token: Token de autenticación de SonarQube (opcional, se puede pasar por CLI)
+#   - language: Lenguaje principal (opcional, se auto-detecta si no se especifica)
+#
+# Para obtener un token:
+# 1. Accede a SonarQube: http://localhost:9000
+# 2. Ve a My Account > Security
+# 3. Genera un nuevo token para el proyecto
+# 4. Copia el token aquí (o pásalo con --token al ejecutar el análisis)
+
+[proyecto-ejemplo-1]
+project_key=mi-proyecto-1
+project_name=Mi Proyecto Java
+project_path=/home/usuario/proyectos/mi-proyecto-java
+token=squ_abc123def456ghi789jkl012mno345pqr678stu901vwx234yz
+language=java
+
+[proyecto-ejemplo-2]
+project_key=mi-proyecto-2
+project_name=Mi Proyecto Python
+project_path=/home/usuario/proyectos/mi-proyecto-python
+token=squ_xyz789uvw456rst123qpo678nml901kji234hgf567edc890ba
+language=python
+
+# ============================================
+# Notas:
+# ============================================
+# - project_key debe ser único en SonarQube
+# - project_path debe ser una ruta absoluta
+# - El token es opcional si lo pasas por CLI con --token
+# - Si no especificas language, se intentará auto-detectar
+# - Puedes tener tantos proyectos como necesites
+

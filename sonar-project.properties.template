@@ -1,0 +1,72 @@
+# ============================================
+# Configuración de Proyecto para SonarQube
+# ============================================
+# Este archivo debe estar en la raíz de tu proyecto
+# Las variables ${PROJECT_KEY}, ${PROJECT_NAME} y ${SONAR_TOKEN}
+# serán reemplazadas automáticamente por el script de análisis
+
+# Clave única del proyecto en SonarQube (obligatorio)
+sonar.projectKey=${PROJECT_KEY}
+
+# Nombre descriptivo del proyecto (obligatorio)
+sonar.projectName=${PROJECT_NAME}
+
+# Versión del proyecto
+sonar.projectVersion=1.0
+
+# Directorio que contiene el código fuente
+# . significa el directorio actual (raíz del proyecto)
+sonar.sources=.
+
+# URL del servidor SonarQube
+sonar.host.url=http://localhost:9000
+
+# Token de autenticación (obligatorio)
+# Obtén el token desde SonarQube: My Account > Security > Generate Token
+sonar.login=${SONAR_TOKEN}
+
+# Codificación de archivos fuente
+sonar.sourceEncoding=UTF-8
+
+# ============================================
+# Configuración opcional por lenguaje
+# ============================================
+
+# Lenguaje principal (opcional, se auto-detecta si no se especifica)
+# Opciones comunes: java, js, ts, py, php, go, kotlin, scala, etc.
+# sonar.language=java
+
+# Exclusiones de archivos (opcional)
+# Ejemplos:
+# sonar.exclusions=**/test/**,**/target/**,**/node_modules/**
+# sonar.test.exclusions=**/src/test/**
+
+# Inclusiones de archivos (opcional)
+# sonar.inclusions=**/*.java,**/*.js
+
+# ============================================
+# Configuración específica por lenguaje
+# ============================================
+
+# Para Java:
+# sonar.java.binaries=target/classes
+# sonar.java.test.binaries=target/test-classes
+# sonar.java.libraries=target/lib/*.jar
+
+# Para JavaScript/TypeScript:
+# sonar.javascript.lcov.reportPaths=coverage/lcov.info
+# sonar.typescript.lcov.reportPaths=coverage/lcov.info
+
+# Para Python:
+# sonar.python.coverage.reportPaths=coverage.xml
+
+# Para PHP:
+# sonar.php.coverage.reportPaths=coverage.xml
+
+# ============================================
+# Notas
+# ============================================
+# - Este archivo puede estar versionado en Git
+# - El token NO debe estar en el repositorio (se pasa por CLI o .env)
+# - Para más opciones, consulta la documentación oficial de SonarQube
+

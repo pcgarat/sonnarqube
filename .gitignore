@@ -1,0 +1,37 @@
+# ============================================
+# SonarQube Docker Setup - .gitignore
+# ============================================
+
+# Archivo de configuración con credenciales
+.env
+
+# Archivo de proyectos con tokens (si contiene información sensible)
+# Mantener projects.conf.example en el repositorio
+projects.conf
+
+# Volúmenes Docker locales (si se crean en el proyecto)
+volumes/
+*.log
+
+# Archivos temporales
+*.tmp
+*.swp
+*.swo
+*~
+
+# Archivos del sistema
+.DS_Store
+Thumbs.db
+
+# IDEs
+.idea/
+.vscode/
+*.iml
+
+# Cursor IDE
+.cursor/
+
+# Archivos de backup
+*.bak
+*.backup
+

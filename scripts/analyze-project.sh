@@ -179,9 +179,8 @@ analyze_project() {
     # Ejecutar análisis con Docker
     echo -e "${GREEN}Ejecutando análisis...${NC}"
     
-    # Obtener nombre del contenedor de SonarQube
+    # Obtener configuración de red y URL de SonarQube
     local compose_project=$(get_env_value COMPOSE_PROJECT_NAME sonarqube)
-    local sonar_container="${compose_project}_sonarqube"
     local network_name="${compose_project}_sonarqube-network"
     local sonar_url=$(get_env_value SONAR_HOST_URL http://localhost:9000)
     
@@ -204,11 +203,12 @@ analyze_project() {
             -e SONAR_HOST_URL="$sonar_url" \
             sonarsource/sonar-scanner-cli:latest
     else
+        # Dentro de la red de Docker Compose, usar el nombre del servicio, no el del contenedor
         docker run --rm \
             --network "$network_name" \
             -v "$project_path:/usr/src" \
             -w /usr/src \
-            -e SONAR_HOST_URL="http://$sonar_container:9000" \
+            -e SONAR_HOST_URL="http://sonarqube:9000" \
             sonarsource/sonar-scanner-cli:latest
     fi
     
@@ -242,14 +242,22 @@ analyze_by_key() {
         return 1
     fi
     
-    # Usar token pasado por parámetro o el de la configuración
+    # Usar token pasado por parámetro, el de la configuración, o el token del scanner
     if [ -z "$token" ]; then
         token="$project_token"
     fi
     
+    # Si aún no hay token, intentar usar el token del scanner desde .env
+    if [ -z "$token" ]; then
+        token=$(get_env_value SONARQUBE_SCANNER_TOKEN "")
+    fi
+    
     if [ -z "$token" ]; then
         echo -e "${RED}Error: No se ha especificado token para el proyecto${NC}"
-        echo -e "${YELLOW}Especifica un token con --token o añádelo a projects.conf${NC}"
+        echo -e "${YELLOW}Opciones:${NC}"
+        echo -e "  - Especifica un token con --token"
+        echo -e "  - Añádelo a projects.conf"
+        echo -e "  - Ejecuta 'make setup-user' para crear un usuario con token automático"
         return 1
     fi
     
@@ -283,8 +291,14 @@ analyze_by_path() {
         echo -e "${YELLOW}No se encontró projectKey, usando: $project_key${NC}"
     fi
     
+    # Si no hay token, intentar usar el token del scanner desde .env
+    if [ -z "$token" ]; then
+        token=$(get_env_value SONARQUBE_SCANNER_TOKEN "")
+    fi
+    
     if [ -z "$token" ]; then
         echo -e "${RED}Error: Debes especificar un token con --token${NC}"
+        echo -e "${YELLOW}O ejecuta 'make setup-user' para crear un usuario con token automático${NC}"
         return 1
     fi
     
@@ -297,6 +311,18 @@ analyze_all() {
     
     if [ ! -f "$PROJECTS_CONF" ]; then
         echo -e "${RED}Error: No existe el archivo projects.conf${NC}"
+        return 1
+    fi
+    
+    # Si no se proporciona token, intentar usar el del scanner
+    if [ -z "$token" ]; then
+        token=$(get_env_value SONARQUBE_SCANNER_TOKEN "")
+    fi
+    
+    if [ -z "$token" ]; then
+        echo -e "${YELLOW}⚠ Advertencia: No se encontró token.${NC}"
+        echo -e "${YELLOW}  Ejecuta 'make setup-user' para crear un usuario con token automático${NC}"
+        echo -e "${YELLOW}  O proporciona un token con --token${NC}"
         return 1
     fi
     

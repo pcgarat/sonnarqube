@@ -112,7 +112,7 @@ delete_project_from_sonarqube() {
     fi
 }
 
-# Función para eliminar proyecto de projects.conf
+# Función para eliminar proyecto de projects.conf de forma robusta
 remove_project_from_conf() {
     local project_key=$1
     
@@ -122,39 +122,53 @@ remove_project_from_conf() {
     
     # Crear archivo temporal
     local temp_file=$(mktemp)
-    local in_section=0
-    local section_start=0
+    local in_section=false
+    local section_found=false
     
-    while IFS= read -r line; do
-        # Detectar inicio de sección
-        if [[ "$line" =~ ^\[.*\]$ ]]; then
-            if [[ "$line" =~ \[${project_key}\] ]]; then
-                in_section=1
-                section_start=1
-                continue
-            else
-                in_section=0
-                section_start=0
-            fi
+    # Procesar cada línea del archivo projects.conf
+    while IFS= read -r line || [ -n "$line" ]; do
+        # Detectar inicio de sección del proyecto a eliminar
+        if [[ "$line" =~ ^\[${project_key}\] ]]; then
+            in_section=true
+            section_found=true
+            # No añadir esta línea (eliminar la sección)
+            continue
         fi
         
-        # Si estamos en la sección del proyecto, saltar todas las líneas hasta la siguiente sección
-        if [ $in_section -eq 1 ]; then
-            # Si encontramos una nueva sección, salir del modo de eliminación
-            if [[ "$line" =~ ^\[.*\]$ ]]; then
-                in_section=0
-                echo "$line" >> "$temp_file"
+        # Detectar inicio de otra sección
+        if [[ "$line" =~ ^\[.*\] ]]; then
+            # Si estábamos en la sección a eliminar, ahora estamos fuera
+            if [ "$in_section" = true ]; then
+                in_section=false
             fi
-            # Si no es una nueva sección, simplemente no la añadimos (la eliminamos)
+            # Añadir la nueva sección
+            echo "$line" >> "$temp_file"
             continue
         fi
         
         # Añadir línea si no estamos en la sección a eliminar
-        echo "$line" >> "$temp_file"
+        if [ "$in_section" = false ]; then
+            echo "$line" >> "$temp_file"
+        fi
     done < "$PROJECTS_CONF"
+    
+    # Si no se encontró la sección, no hacer cambios
+    if [ "$section_found" = false ]; then
+        rm -f "$temp_file"
+        return 1
+    fi
     
     # Reemplazar archivo original
     mv "$temp_file" "$PROJECTS_CONF"
+    
+    # Limpiar líneas vacías múltiples al final del archivo (opcional)
+    # Esto mantiene el archivo limpio pero no es crítico
+    if [ -f "$PROJECTS_CONF" ]; then
+        # Eliminar líneas vacías al final
+        while [ -s "$PROJECTS_CONF" ] && [ -z "$(tail -c 1 "$PROJECTS_CONF")" ] || [ "$(tail -c 1 "$PROJECTS_CONF")" = $'\n' ]; do
+            truncate -s -1 "$PROJECTS_CONF" 2>/dev/null || sed -i '$ { /^$/d; }' "$PROJECTS_CONF" 2>/dev/null || break
+        done
+    fi
     
     return 0
 }

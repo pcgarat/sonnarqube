@@ -107,9 +107,19 @@ create_sonar_properties() {
     
     local properties_file="$project_path/sonar-project.properties"
     
-    # Si ya existe, usarlo
+    # Si ya existe, actualizar el token si es necesario
     if [ -f "$properties_file" ]; then
         echo -e "${YELLOW}Usando sonar-project.properties existente${NC}"
+        # Asegurarse de que el token está actualizado
+        if [ -n "$token" ]; then
+            if grep -q "^sonar.login=" "$properties_file"; then
+                # Reemplazar token existente
+                sed -i "s|^sonar.login=.*|sonar.login=$token|" "$properties_file"
+            else
+                # Añadir token si no existe
+                echo "sonar.login=$token" >> "$properties_file"
+            fi
+        fi
         return 0
     fi
     
@@ -148,6 +158,7 @@ analyze_project() {
     local project_name=$3
     local token=$4
     local language=$5
+    local debug_flag=$6
     
     # Validar que el directorio existe
     if [ ! -d "$project_path" ]; then
@@ -165,8 +176,57 @@ analyze_project() {
     echo -e "${GREEN}Ruta:${NC} $project_path"
     echo ""
     
-    # Crear sonar-project.properties si no existe
+    # Crear o actualizar sonar-project.properties
     create_sonar_properties "$project_path" "$project_key" "$project_name" "$token" "$language"
+    
+    # Asegurarse de que el token y projectKey están correctos en sonar-project.properties
+    # IMPORTANTE: Usar siempre el token del scanner (con permisos de administrador)
+    # Los Project Analysis Tokens no tienen permisos para cargar configuraciones globales
+    local scanner_token=$(get_env_value SONARQUBE_SCANNER_TOKEN "")
+    if [ -n "$scanner_token" ]; then
+        token="$scanner_token"
+        echo -e "${YELLOW}Usando token del scanner (con permisos de administrador)${NC}"
+    fi
+    
+    local properties_file="$project_path/sonar-project.properties"
+    if [ -f "$properties_file" ]; then
+        # Actualizar projectKey si no coincide
+        if grep -q "^sonar.projectKey=" "$properties_file"; then
+            local existing_key=$(grep "^sonar.projectKey=" "$properties_file" | cut -d'=' -f2- | tr -d ' ')
+            if [ "$existing_key" != "$project_key" ]; then
+                echo -e "${YELLOW}⚠ Advertencia: projectKey en sonar-project.properties ($existing_key) no coincide con projects.conf ($project_key)${NC}"
+                echo -e "${YELLOW}Actualizando projectKey...${NC}"
+                sed -i "s|^sonar.projectKey=.*|sonar.projectKey=$project_key|" "$properties_file"
+            fi
+        else
+            echo "sonar.projectKey=$project_key" >> "$properties_file"
+        fi
+        
+        # Actualizar o añadir sonar.login con el token actual usando método robusto
+        local temp_props=$(mktemp)
+        local login_found=false
+        while IFS= read -r line || [ -n "$line" ]; do
+            if [[ "$line" =~ ^sonar\.login= ]]; then
+                echo "sonar.login=$token" >> "$temp_props"
+                login_found=true
+            else
+                echo "$line" >> "$temp_props"
+            fi
+        done < "$properties_file"
+        # Si no se encontró sonar.login, añadirlo
+        if [ "$login_found" = false ]; then
+            echo "sonar.login=$token" >> "$temp_props"
+        fi
+        mv "$temp_props" "$properties_file"
+        
+        # Asegurarse de que sonar.host.url está correcto
+        local sonar_url=$(get_env_value SONAR_HOST_URL http://localhost:9000)
+        if grep -q "^sonar.host.url=" "$properties_file"; then
+            sed -i "s|^sonar.host.url=.*|sonar.host.url=$sonar_url|" "$properties_file"
+        else
+            echo "sonar.host.url=$sonar_url" >> "$properties_file"
+        fi
+    fi
     
     # Verificar que SonarQube está corriendo
     local sonar_url=$(get_env_value SONAR_HOST_URL http://localhost:9000)
@@ -195,13 +255,31 @@ analyze_project() {
     fi
     
     # Usar sonar-scanner como contenedor temporal
+    # Pasar el token como variable de entorno SONAR_LOGIN para asegurar autenticación
+    # También pasar -X para debug si se solicita
+    local debug_flag="${6:-}"
+    
+    # Verificar que el token es válido antes de ejecutar
+    echo -e "${YELLOW}Verificando token...${NC}"
+    local token_check=$(curl -s -w "\n%{http_code}" -u "$token:" "$sonar_url/api/authentication/validate" 2>/dev/null)
+    local token_http_code=$(echo "$token_check" | tail -n1)
+    if [ "$token_http_code" != "200" ]; then
+        echo -e "${RED}Error: Token inválido o sin permisos${NC}"
+        echo -e "${YELLOW}El token puede haber expirado o no tener permisos para analizar este proyecto${NC}"
+        echo -e "${YELLOW}Intenta regenerar el token ejecutando 'make add-project' nuevamente${NC}"
+        return 1
+    fi
+    echo -e "${GREEN}✓ Token válido${NC}"
+    
     if [ "$network_name" = "host" ]; then
         docker run --rm \
             --network host \
             -v "$project_path:/usr/src" \
             -w /usr/src \
             -e SONAR_HOST_URL="$sonar_url" \
-            sonarsource/sonar-scanner-cli:latest
+            -e SONAR_LOGIN="$token" \
+            sonarsource/sonar-scanner-cli:latest \
+            $debug_flag
     else
         # Dentro de la red de Docker Compose, usar el nombre del servicio, no el del contenedor
         docker run --rm \
@@ -209,7 +287,9 @@ analyze_project() {
             -v "$project_path:/usr/src" \
             -w /usr/src \
             -e SONAR_HOST_URL="http://sonarqube:9000" \
-            sonarsource/sonar-scanner-cli:latest
+            -e SONAR_LOGIN="$token" \
+            sonarsource/sonar-scanner-cli:latest \
+            $debug_flag
     fi
     
     echo ""
@@ -242,14 +322,19 @@ analyze_by_key() {
         return 1
     fi
     
-    # Usar token pasado por parámetro, el de la configuración, o el token del scanner
-    if [ -z "$token" ]; then
-        token="$project_token"
-    fi
+    # Usar token del scanner (con permisos globales) como prioridad
+    # Los Project Analysis Tokens no tienen permisos para cargar configuraciones globales
+    local scanner_token=$(get_env_value SONARQUBE_SCANNER_TOKEN "")
     
-    # Si aún no hay token, intentar usar el token del scanner desde .env
-    if [ -z "$token" ]; then
-        token=$(get_env_value SONARQUBE_SCANNER_TOKEN "")
+    # Si hay token del scanner, usarlo (tiene permisos de administrador)
+    if [ -n "$scanner_token" ]; then
+        token="$scanner_token"
+    # Si no, usar token pasado por parámetro o el de la configuración
+    elif [ -n "$token" ]; then
+        # Usar el token proporcionado
+        :
+    elif [ -n "$project_token" ]; then
+        token="$project_token"
     fi
     
     if [ -z "$token" ]; then
@@ -261,7 +346,7 @@ analyze_by_key() {
         return 1
     fi
     
-    analyze_project "$project_path" "$project_key" "$project_name" "$token" "$language"
+    analyze_project "$project_path" "$project_key" "$project_name" "$token" "$language" ""
 }
 
 # Función para analizar proyecto por ruta
@@ -302,7 +387,7 @@ analyze_by_path() {
         return 1
     fi
     
-    analyze_project "$project_path" "$project_key" "$project_name" "$token" ""
+    analyze_project "$project_path" "$project_key" "$project_name" "$token" "" ""
 }
 
 # Función para analizar todos los proyectos
@@ -380,6 +465,10 @@ while [[ $# -gt 0 ]]; do
             TOKEN="$2"
             shift 2
             ;;
+        --debug|-X)
+            DEBUG_FLAG="-X"
+            shift
+            ;;
         --help)
             show_help
             exit 0
@@ -402,7 +491,7 @@ fi
 # Ejecutar según el modo
 case $MODE in
     by_key)
-        analyze_by_key "$PROJECT_KEY" "$TOKEN"
+        analyze_by_key "$PROJECT_KEY" "$TOKEN" "$DEBUG_FLAG"
         ;;
     by_path)
         analyze_by_path "$PROJECT_PATH" "$TOKEN"

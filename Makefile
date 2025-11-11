@@ -66,16 +66,18 @@ start: check-env
 		printf "  $(YELLOW)SonarQube Scanner:$(NC) $$(grep SONARQUBE_USER $(ENV_FILE) | cut -d '=' -f2 | tr -d ' ') / $$(grep SONARQUBE_PASSWORD $(ENV_FILE) | cut -d '=' -f2 | tr -d ' ')\n"; \
 		if grep -q "^SONARQUBE_SCANNER_TOKEN=" $(ENV_FILE) 2>/dev/null; then \
 			token=$$(grep SONARQUBE_SCANNER_TOKEN $(ENV_FILE) | cut -d '=' -f2 | tr -d ' '); \
-			printf "  $(YELLOW)Scanner Token:$(NC)     $${token:0:20}...\n"; \
+			token_preview=$$(echo "$$token" | cut -c1-20); \
+			printf "  $(YELLOW)Scanner Token:$(NC)     $${token_preview}...\n"; \
 		fi; \
 	else \
-		printf "  $(YELLOW)SonarQube Scanner:$(NC) (no configurado - ejecuta 'make setup-user')\n"; \
+		printf "  $(YELLOW)SonarQube Scanner:$(NC) (se configurará automáticamente cuando SonarQube esté listo)\n"; \
 	fi
 	@echo ""
 	@printf "$(BLUE)Ejecuta 'make status' para ver el estado o 'make logs' para ver los logs.$(NC)\n"
-	@if ! grep -q "^SONARQUBE_USER=" $(ENV_FILE) 2>/dev/null; then \
-		printf "$(YELLOW)Ejecuta 'make setup-user' después de que SonarQube esté listo para configurar el usuario con permisos.$(NC)\n"; \
-	fi
+	@printf "$(YELLOW)El usuario scanner se configurará automáticamente cuando SonarQube esté listo.$(NC)\n"
+	@echo ""
+	@printf "$(BLUE)Configurando usuario scanner automáticamente en segundo plano...$(NC)\n"
+	@(sleep 30 && $(SCRIPTS_DIR)/setup-sonarqube-user.sh --silent > /dev/null 2>&1 && printf "$(GREEN)✓ Usuario scanner configurado automáticamente$(NC)\n" || true) &
 
 # Configurar usuario de SonarQube con permisos completos
 setup-user: check-env
@@ -90,15 +92,28 @@ up: check-env
 	docker-compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) up
 
 # Detener servicios
-stop:
+stop: check-env
 	@printf "$(YELLOW)Deteniendo servicios...$(NC)\n"
-	docker-compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) stop
+	@docker-compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) stop
+	@# Detener también el contenedor del scanner si está corriendo
+	@scanner_container=$$(grep "^COMPOSE_PROJECT_NAME=" $(ENV_FILE) 2>/dev/null | cut -d '=' -f2 | tr -d ' ' || echo "sonarqube")_scanner; \
+	if docker ps -a --format "{{.Names}}" | grep -q "^$$scanner_container$$"; then \
+		printf "$(YELLOW)Deteniendo contenedor del scanner...$(NC)\n"; \
+		docker stop $$scanner_container 2>/dev/null || true; \
+	fi
 	@printf "$(GREEN)Servicios detenidos.$(NC)\n"
 
 # Detener y eliminar contenedores
-down:
+down: check-env
 	@printf "$(YELLOW)Deteniendo y eliminando contenedores...$(NC)\n"
-	docker-compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) down
+	@# Primero detener y eliminar el contenedor del scanner si existe (antes de docker-compose down)
+	@scanner_container=$$(grep "^COMPOSE_PROJECT_NAME=" $(ENV_FILE) 2>/dev/null | cut -d '=' -f2 | tr -d ' ' || echo "sonarqube")_scanner; \
+	if docker ps -a --format "{{.Names}}" | grep -q "^$$scanner_container$$"; then \
+		printf "$(YELLOW)Eliminando contenedor del scanner...$(NC)\n"; \
+		docker stop $$scanner_container 2>/dev/null || true; \
+		docker rm $$scanner_container 2>/dev/null || true; \
+	fi
+	@docker-compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) down
 	@printf "$(GREEN)Contenedores eliminados.$(NC)\n"
 	@printf "$(YELLOW)Nota: Los volúmenes se mantienen. Usa 'make clean' para eliminarlos.$(NC)\n"
 
@@ -124,7 +139,8 @@ status: check-env
 		printf "  $(YELLOW)SonarQube Scanner:$(NC) $$(grep SONARQUBE_USER $(ENV_FILE) | cut -d '=' -f2 | tr -d ' ') / $$(grep SONARQUBE_PASSWORD $(ENV_FILE) | cut -d '=' -f2 | tr -d ' ')\n"; \
 		if grep -q "^SONARQUBE_SCANNER_TOKEN=" $(ENV_FILE) 2>/dev/null; then \
 			token=$$(grep SONARQUBE_SCANNER_TOKEN $(ENV_FILE) | cut -d '=' -f2 | tr -d ' '); \
-			printf "  $(YELLOW)Scanner Token:$(NC)     $${token:0:20}...\n"; \
+			token_preview=$$(echo "$$token" | cut -c1-20); \
+			printf "  $(YELLOW)Scanner Token:$(NC)     $${token_preview}...\n"; \
 		fi; \
 	fi
 	@printf "  $(YELLOW)PostgreSQL User:$(NC)    $$(grep POSTGRES_USER $(ENV_FILE) | cut -d '=' -f2 | tr -d ' ' || echo 'sonar')\n"
@@ -146,12 +162,14 @@ logs:
 	docker-compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) logs -f
 
 # Limpiar volúmenes (con confirmación)
-clean:
+clean: check-env
 	@printf "$(RED)⚠️  ADVERTENCIA: Esto eliminará TODOS los datos persistentes.$(NC)\n"
 	@printf "$(YELLOW)Esto incluye:$(NC)\n"
 	@echo "  - Todos los proyectos y análisis en SonarQube"
 	@echo "  - Todos los datos de PostgreSQL"
 	@echo "  - Todos los plugins y configuraciones"
+	@echo "  - Token del scanner (se limpiará del .env)"
+	@echo "  - Contraseña del admin (se restablecerá a 'admin')"
 	@echo ""
 	@printf "$(RED)¿Estás seguro? Escribe 'si' para confirmar: $(NC)"; \
 	read confirm && \
@@ -163,6 +181,25 @@ clean:
 				docker volume ls --filter "name=$$(grep COMPOSE_PROJECT_NAME $(ENV_FILE) | cut -d '=' -f2 | tr -d ' ' || echo 'sonarqube')" -q | xargs -r docker volume rm -f 2>/dev/null || true; \
 				docker volume ls --filter "name=postgres" -q | xargs -r docker volume rm -f 2>/dev/null || true; \
 				printf "$(GREEN)✓ Volúmenes eliminados.$(NC)\n"; \
+				printf "$(YELLOW)Limpiando configuración en .env...$(NC)\n"; \
+				if [ -f $(ENV_FILE) ]; then \
+					temp_env=$$(mktemp); \
+					while IFS= read -r line || [ -n "$$line" ]; do \
+						case "$$line" in \
+							SONARQUBE_SCANNER_TOKEN=*) \
+								echo "# SONARQUBE_SCANNER_TOKEN=" >> "$$temp_env"; \
+								;; \
+							SONARQUBE_ADMIN_PASSWORD=*) \
+								echo "SONARQUBE_ADMIN_PASSWORD=admin" >> "$$temp_env"; \
+								;; \
+							*) \
+								echo "$$line" >> "$$temp_env"; \
+								;; \
+						esac; \
+					done < $(ENV_FILE); \
+					mv "$$temp_env" $(ENV_FILE); \
+					printf "$(GREEN)✓ Token del scanner eliminado y contraseña del admin restablecida.$(NC)\n"; \
+				fi; \
 				printf "$(BLUE)Nota: projects.conf no se elimina. Usa 'make remove-project' para eliminar proyectos individuales.$(NC)\n"; \
 				;; \
 			*) \
@@ -186,7 +223,7 @@ analyze: check-env
 		printf "$(RED)Error: El script analyze-project.sh no existe.$(NC)\n"; \
 		exit 1; \
 	fi
-	@bash $(SCRIPTS_DIR)/analyze-project.sh --project $(PROJECT)
+	@bash $(SCRIPTS_DIR)/analyze-project.sh --project $(PROJECT) $(ARGS)
 
 # Analizar todos los proyectos
 analyze-all: check-env
